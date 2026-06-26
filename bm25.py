@@ -92,3 +92,32 @@ class BM25Retriever:
             denominator = df + 0.5
             # Evitamos IDFs negativos para terminos hiper-comunes aplicando un maximo inferior
             self.idf[term] = max(0.0001, math.log(1.0 + (numerator / denominator)))
+
+    def retrieve(self, query: str, top_k: int = 5) -> List[Tuple[float, Union[str, int]]]:
+        """
+        Calcula la puntuacion BM25 de todos los documentos frente a una consulta dada.
+        Retorna una lista ordenada de tuplas (score, doc_id).
+        """
+        query_tokens = self._tokenize(query)
+        if not query_tokens or self.corpus_size == 0:
+            return []
+            
+        scores: List[Tuple[float, Union[str, int]]] = []
+        
+        for doc_id, doc_len in self.doc_lengths.items():
+            score = 0.0
+            term_freqs = self.doc_term_freqs[doc_id]
+            
+            for token in query_tokens:
+                if token in term_freqs:
+                    tf = term_freqs[token]
+                    # Aplicamos formula de Okapi BM25
+                    denom = tf + self.k1 * (1.0 - self.b + self.b * (doc_len / self.avg_doc_len))
+                    score += self.idf.get(token, 0.0) * ((tf * (self.k1 + 1.0)) / denom)
+                    
+            if score > 0.0:
+                scores.append((score, doc_id))
+                
+        # Ordenamos descendente
+        scores.sort(key=lambda x: x[0], reverse=True)
+        return scores[:top_k]
