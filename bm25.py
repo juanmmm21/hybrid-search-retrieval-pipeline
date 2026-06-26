@@ -1,0 +1,94 @@
+import re
+import math
+from typing import List, Dict, Set, Union, Tuple
+
+class BM25Retriever:
+    """
+    Recuperador clasico basado en el algoritmo de puntuacion Okapi BM25.
+    
+    Analiza la relevancia de un texto de consulta frente a un corpus entrenado,
+    penalizando la redundancia de palabras hiper-frecuentes mediante IDF
+    y compensando la longitud de los documentos.
+    """
+    
+    def __init__(self, k1: float = 1.5, b: float = 0.75) -> None:
+        """
+        Args:
+            k1: Parametro de saturacion de frecuencia de termino (tipicamente entre 1.2 y 2.0).
+            b: Parametro de normalizacion de longitud del documento (tipicamente 0.75).
+        """
+        self.k1 = k1
+        self.b = b
+        
+        # Stop-words basicas en español e ingles para reducir ruido
+        self.stopwords: Set[str] = {
+            "el", "la", "los", "las", "un", "una", "unos", "unas", "y", "o", "pero", "si", "no",
+            "de", "del", "a", "al", "en", "con", "por", "para", "como", "que", "es", "son",
+            "the", "a", "an", "and", "or", "but", "if", "not", "of", "to", "in", "with", "for", "is", "are"
+        }
+        
+        self.corpus_size: int = 0
+        self.avg_doc_len: float = 0.0
+        
+        # Estructuras de datos para calculo de BM25
+        self.doc_lengths: Dict[Union[str, int], int] = {}
+        # Frecuencia de terminos por documento: {doc_id: {term: frequency}}
+        self.doc_term_freqs: Dict[Union[str, int], Dict[str, int]] = {}
+        # Frecuencia de documentos por termino: {term: numero_de_documentos_que_lo_contienen}
+        self.doc_freqs: Dict[str, int] = {}
+        # Inverse Document Frequency de cada termino
+        self.idf: Dict[str, float] = {}
+
+    def _tokenize(self, text: str) -> List[str]:
+        """
+        Tokeniza un string: convierte a minusculas, limpia signos de puntuacion
+        y filtra palabras vacias (stop-words).
+        """
+        text_lower = text.lower()
+        # Filtramos caracteres no alfanumericos usando expresiones regulares
+        words = re.findall(r'\b\w+\b', text_lower)
+        # Filtramos stop-words
+        return [w for w in words if w not in self.stopwords]
+
+    def fit(self, corpus: Dict[Union[str, int], str]) -> None:
+        """
+        Entrena el recuperador BM25 calculando las estadisticas globales sobre el corpus.
+        
+        Args:
+            corpus: Diccionario mapeando doc_id a su contenido de texto plano.
+        """
+        self.corpus_size = len(corpus)
+        if self.corpus_size == 0:
+            return
+            
+        total_len = 0
+        self.doc_lengths.clear()
+        self.doc_term_freqs.clear()
+        self.doc_freqs.clear()
+        
+        # 1. Contamos frecuencias de terminos y longitudes por documento
+        for doc_id, text in corpus.items():
+            tokens = self._tokenize(text)
+            doc_len = len(tokens)
+            self.doc_lengths[doc_id] = doc_len
+            total_len += doc_len
+            
+            # Frecuencias locales en este documento
+            freqs: Dict[str, int] = {}
+            for token in tokens:
+                freqs[token] = freqs.get(token, 0) + 1
+            self.doc_term_freqs[doc_id] = freqs
+            
+            # Frecuencias globales de documentos que contienen cada termino
+            for token in freqs.keys():
+                self.doc_freqs[token] = self.doc_freqs.get(token, 0) + 1
+                
+        self.avg_doc_len = total_len / self.corpus_size
+        
+        # 2. Calculamos el IDF (Inverse Document Frequency) de cada termino
+        # Usamos la formula estandar de BM25 con suavizado
+        for term, df in self.doc_freqs.items():
+            numerator = self.corpus_size - df + 0.5
+            denominator = df + 0.5
+            # Evitamos IDFs negativos para terminos hiper-comunes aplicando un maximo inferior
+            self.idf[term] = max(0.0001, math.log(1.0 + (numerator / denominator)))
