@@ -142,14 +142,16 @@ def main() -> None:
         print("\n  [C] Hibrido (Reciprocal Rank Fusion - RRF):")
         hybrid_rrf = pipeline.search(query=q, query_vector=q_vec, top_k=2, fusion_method="rrf")
         for r in hybrid_rrf:
-            print(f"    - ID: {r['id']} | Score RRF: {r['score']:.4f} | Sparse: {r['sparse_score']:.2f} | Dense Dist: {r['dense_distance']:.4f if r['dense_distance'] is not None else 0.0} | '{documents[r['id']]}'")
+            dense_dist = r['dense_distance'] if r['dense_distance'] is not None else 0.0
+            print(f"    - ID: {r['id']} | Score RRF: {r['score']:.4f} | Sparse: {r['sparse_score']:.2f} | Dense Dist: {dense_dist:.4f} | '{documents[r['id']]}'")
             
         # D. Hibrida (Score Normalization Fusion - Ponderada)
         alpha = 0.6  # Asignamos 60% peso a dense y 40% a sparse
         print(f"\n  [D] Hibrido (Score Fusion - pesos alpha={alpha}):")
         hybrid_score = pipeline.search(query=q, query_vector=q_vec, top_k=2, fusion_method="score", alpha=alpha)
         for r in hybrid_score:
-            print(f"    - ID: {r['id']} | Score Normalizado: {r['score']:.4f} | Sparse: {r['sparse_score']:.2f} | Dense Dist: {r['dense_distance']:.4f if r['dense_distance'] is not None else 0.0} | '{documents[r['id']]}'")
+            dense_dist = r['dense_distance'] if r['dense_distance'] is not None else 0.0
+            print(f"    - ID: {r['id']} | Score Normalizado: {r['score']:.4f} | Sparse: {r['sparse_score']:.2f} | Dense Dist: {dense_dist:.4f} | '{documents[r['id']]}'")
             
         print("-"*50)
         
