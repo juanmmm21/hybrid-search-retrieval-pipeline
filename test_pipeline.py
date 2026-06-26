@@ -75,3 +75,41 @@ class TestHybridSearchPipeline(unittest.TestCase):
         self.assertEqual(len(res), 2)
         self.assertAlmostEqual(res[0][0], 0.5)
         self.assertAlmostEqual(res[1][0], 0.5)
+
+    def test_pipeline_integration(self) -> None:
+        """
+        Verifica la orquestacion completa del pipeline de busqueda hibrida.
+        """
+        from database import NanoVectorDB
+        from pipeline import HybridSearchPipeline
+        
+        # 1. Poblamos la base de datos vectorial
+        db = NanoVectorDB(dimension=3, index_type="flat", metric="cosine")
+        db.insert(id="doc1", vector=[1.0, 0.0, 0.0], metadata={"category": "nature"})
+        db.insert(id="doc2", vector=[0.0, 1.0, 0.0], metadata={"category": "tech"})
+        
+        # 2. Inicializamos el pipeline y entrenamos BM25
+        pipeline = HybridSearchPipeline(vector_db=db)
+        corpus = {
+            "doc1": "el bosque y los arboles de la selva tropical",
+            "doc2": "programacion de software y servidores en la nube"
+        }
+        pipeline.fit_sparse(corpus)
+        
+        # 3. Busqueda hibrida: query "selva" + vector apuntando a nature
+        res = pipeline.search(
+            query="selva",
+            query_vector=[1.0, 0.0, 0.0],
+            top_k=2,
+            fusion_method="rrf"
+        )
+        
+        self.assertEqual(len(res), 2)
+        # El primero debe ser doc1 (mayor coincidencia semantica y lexica)
+        self.assertEqual(res[0]["id"], "doc1")
+        self.assertEqual(res[0]["metadata"]["category"], "nature")
+        self.assertTrue(res[0]["sparse_score"] > 0.0)
+        self.assertIsNotNone(res[0]["dense_distance"])
+
+if __name__ == "__main__":
+    unittest.main()
