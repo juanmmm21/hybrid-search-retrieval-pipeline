@@ -24,6 +24,9 @@ class BM25Retriever:
         self.stopwords: Set[str] = {
             "el", "la", "los", "las", "un", "una", "unos", "unas", "y", "o", "pero", "si", "no",
             "de", "del", "a", "al", "en", "con", "por", "para", "como", "que", "es", "son",
+            "cuales", "cual", "como", "cuando", "donde", "quien", "quienes", "que", "porque", "por que",
+            "algun", "alguna", "algunos", "algunas", "otro", "otra", "otros", "otras", "este", "esta",
+            "estos", "estas", "un", "una", "todo", "todos", "toda", "todas",
             "the", "a", "an", "and", "or", "but", "if", "not", "of", "to", "in", "with", "for", "is", "are"
         }
         
@@ -56,6 +59,8 @@ class BM25Retriever:
             if w in self.stopwords:
                 continue
             tokens.append(w)
+            if len(w) > 3:
+                tokens.append(w[:3])
             if len(w) > 4:
                 tokens.append(w[:4])
         return tokens
@@ -79,7 +84,16 @@ class BM25Retriever:
         
         # 1. Contamos frecuencias de terminos y longitudes por documento
         for doc_id, text in corpus.items():
-            tokens = self._tokenize(text)
+            doc_id_str = str(doc_id)
+            source_name = doc_id_str
+            for sep in ["_chunk_", "_sentence_", "_page_"]:
+                if sep in doc_id_str:
+                    source_name = doc_id_str.split(sep)[0]
+                    break
+            source_clean = source_name.replace("file_", "").replace(".pdf", "").replace(".txt", "").replace(".md", "").replace("-", " ").replace("_", " ")
+            augmented_text = f"{source_clean} {text}"
+            
+            tokens = self._tokenize(augmented_text)
             doc_len = len(tokens)
             self.doc_lengths[doc_id] = doc_len
             total_len += doc_len
