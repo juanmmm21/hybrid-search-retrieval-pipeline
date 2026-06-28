@@ -67,6 +67,7 @@ class BM25Retriever:
         Args:
             corpus: Diccionario mapeando doc_id a su contenido de texto plano.
         """
+        self.corpus = corpus
         self.corpus_size = len(corpus)
         if self.corpus_size == 0:
             return
@@ -126,6 +127,17 @@ class BM25Retriever:
                     score += self.idf.get(token, 0.0) * ((tf * (self.k1 + 1.0)) / denom)
                     
             if score > 0.0:
+                # Penalizar paginas de bibliografia, indices o anexos (sin importar acentos)
+                doc_text = self.corpus.get(doc_id, "")
+                doc_lower = doc_text.lower()
+                accents = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u", "ñ": "n"}
+                doc_norm = doc_lower
+                for a, b in accents.items():
+                    doc_norm = doc_norm.replace(a, b)
+                    
+                penalty_keywords = ["bibliografia", "webgrafia", "indice de", "anexo", "referencias"]
+                if any(kw in doc_norm[:120] for kw in penalty_keywords):
+                    score *= 0.1
                 scores.append((score, doc_id))
                 
         # Ordenamos descendente
