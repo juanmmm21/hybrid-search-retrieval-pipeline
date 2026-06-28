@@ -41,14 +41,24 @@ class BM25Retriever:
 
     def _tokenize(self, text: str) -> List[str]:
         """
-        Tokeniza un string: convierte a minusculas, limpia signos de puntuacion
-        y filtra palabras vacias (stop-words).
+        Tokeniza un string: convierte a minusculas, limpia signos de puntuacion,
+        normaliza acentos, genera stems y filtra palabras vacias (stop-words).
         """
-        text_lower = text.lower()
+        accents = {"á": "a", "é": "e", "í": "i", "ó": "o", "ú": "u", "ü": "u", "ñ": "n"}
+        text_norm = text.lower()
+        for a, b in accents.items():
+            text_norm = text_norm.replace(a, b)
         # Filtramos caracteres no alfanumericos usando expresiones regulares
-        words = re.findall(r'\b\w+\b', text_lower)
-        # Filtramos stop-words
-        return [w for w in words if w not in self.stopwords]
+        words = re.findall(r'\b\w+\b', text_norm)
+        
+        tokens = []
+        for w in words:
+            if w in self.stopwords:
+                continue
+            tokens.append(w)
+            if len(w) > 4:
+                tokens.append(w[:4])
+        return tokens
 
     def fit(self, corpus: Dict[Union[str, int], str]) -> None:
         """
