@@ -1,110 +1,110 @@
 # hybrid-search-retrieval-pipeline
 
-Pipeline de recuperacion hibrida que combina busqueda lexica clasica (Okapi BM25) y busqueda vectorial semantica (NanoVectorDB) utilizando algoritmos avanzados de fusion de rankings (RRF y Score Normalization).
+Hybrid retrieval pipeline that combines classic lexical search (Okapi BM25) and semantic vector search (NanoVectorDB) using advanced ranking fusion algorithms (RRF and Score Normalization).
 
-Este modulo es una pieza central en arquitecturas de produccion de Generacion Aumentada por Recuperacion (RAG), resolviendo la limitacion de buscar unicamente por similitud semantica (que suele ignorar codigos de error, acronimos, numeros de serie o IDs de producto) o buscar unicamente por palabras clave (que carece de comprension contextual y sinonimia).
+This module is a core piece in production Retrieval-Augmented Generation (RAG) architectures, solving the limitation of searching only by semantic similarity (which tends to ignore error codes, acronyms, serial numbers, or product IDs) or searching only by keywords (which lacks contextual understanding and synonymy).
 
-## Arquitectura y Fundamentos Teoricos
+## Architecture and Theoretical Foundations
 
-El pipeline implementa una estrategia de busqueda paralela de dos vias (Dense + Sparse) y consolida sus resultados mediante tecnicas de alineacion de rankings.
+The pipeline implements a two-way parallel search strategy (Dense + Sparse) and consolidates its results through ranking alignment techniques.
 
 ```mermaid
 graph TD
-    Query[Consulta del Usuario] --> Tokenizer[Tokenizador BM25]
-    Query --> Embedder[Codificador de Embeddings]
+    Query[User Query] --> Tokenizer[BM25 Tokenizer]
+    Query --> Embedder[Embedding Encoder]
     
-    subgraph Rama Dispersa (Sparse)
+    subgraph Sparse Branch
         Tokenizer --> BM25Engine[BM25 Retriever]
-        BM25Engine --> SparseScores[Rankings Lexicos]
+        BM25Engine --> SparseScores[Lexical Rankings]
     end
     
-    subgraph Rama Densa (Dense)
-        Embedder --> LocalModel[Modelo Contrastivo Local]
-        Embedder -. Fallback .-> HashSim[Hash Vectorizer determinista]
+    subgraph Dense Branch
+        Embedder --> LocalModel[Local Contrastive Model]
+        Embedder -. Fallback .-> HashSim[Deterministic Hash Vectorizer]
         LocalModel --> VectorQuery[Query Vector]
         HashSim --> VectorQuery
         VectorQuery --> NanoVectorDB[HNSW NanoVectorDB]
-        NanoVectorDB --> DenseScores[Rankings Vectoriales]
+        NanoVectorDB --> DenseScores[Vector Rankings]
     end
     
-    SparseScores --> FusionManager[Gestor de Fusion]
+    SparseScores --> FusionManager[Fusion Manager]
     DenseScores --> FusionManager
     
     FusionManager --> RRFAlg[Reciprocal Rank Fusion]
     FusionManager --> ScoreNormAlg[Score Normalization & Fusion]
     
-    RRFAlg --> FinalRank[Top-K Documentos Recuperados]
+    RRFAlg --> FinalRank[Top-K Retrieved Documents]
     ScoreNormAlg --> FinalRank
 ```
 
-### 1. Busqueda Dispersa (Okapi BM25)
+### 1. Sparse Search (Okapi BM25)
 
-El modulo `BM25Retriever` implementa el algoritmo Okapi BM25 no ponderado sobre un corpus estatico indexado localmente. La puntuacion de un documento $D$ respecto a una consulta $Q$ compuesta por terminos $q_1, q_2, \dots, q_n$ se define formalmente como:
+The `BM25Retriever` module implements the unweighted Okapi BM25 algorithm over a locally indexed static corpus. The score of a document $D$ with respect to a query $Q$ composed of terms $q_1, q_2, \dots, q_n$ is formally defined as:
 
 $$\text{score}(D, Q) = \sum_{i=1}^{n} \text{IDF}(q_i) \cdot \frac{f(q_i, D) \cdot (k_1 + 1)}{f(q_i, D) + k_1 \cdot \left(1 - b + b \cdot \frac{|D|}{\text{avgdl}}\right)}$$
 
-Donde:
-*   $f(q_i, D)$ representa la frecuencia absoluta del termino $q_i$ en el documento $D$.
-*   $|D|$ es la longitud en tokens del documento analizado.
-*   $\text{avgdl}$ es la longitud promedio de todos los documentos dentro del corpus indexado.
-*   $k_1$ es el parametro de saturacion del termino (configurado por defecto en `1.5`), que limita la influencia del crecimiento no lineal de frecuencias del mismo termino.
-*   $b$ es el coeficiente de normalizacion de longitud del documento (por defecto `0.75`), penalizando documentos excesivamente largos si no aportan informacion relevante.
+Where:
+*   $f(q_i, D)$ represents the absolute frequency of term $q_i$ in document $D$.
+*   $|D|$ is the length in tokens of the analyzed document.
+*   $\text{avgdl}$ is the average length of all documents within the indexed corpus.
+*   $k_1$ is the term saturation parameter (defaults to `1.5`), which limits the influence of the non-linear growth of the same term's frequency.
+*   $b$ is the document length normalization coefficient (defaults to `0.75`), penalizing excessively long documents if they don't add relevant information.
 
-El calculo de la frecuencia inversa de documento ($\text{IDF}$) aplica suavizado para prevenir valores indeterminados o negativos ante terminos excesivamente comunes en el corpus:
+The inverse document frequency ($\text{IDF}$) calculation applies smoothing to prevent indeterminate or negative values for terms that are excessively common in the corpus:
 
 $$\text{IDF}(q_i) = \ln\left(1.0 + \frac{N - df(q_i) + 0.5}{df(q_i) + 0.5}\right)$$
 
-Donde $N$ es el tamano del corpus y $df(q_i)$ es el numero de documentos que contienen al menos una ocurrencia del termino $q_i$. Si un termino genera un IDF teorico negativo, se establece un suelo inferior de `0.0001` para asegurar la estabilidad numerica del ranking.
+Where $N$ is the corpus size and $df(q_i)$ is the number of documents containing at least one occurrence of term $q_i$. If a term produces a theoretically negative IDF, a floor of `0.0001` is applied to ensure the ranking's numerical stability.
 
-El pipeline pre-procesa la consulta y el corpus aplicando una tokenizacion que convierte el texto a minusculas, extrae palabras mediante expresiones regulares a nivel de palabra `\b\w+\b` y remueve stop-words de una lista integrada en espanol e ingles para mitigar el ruido estadistico.
+The pipeline preprocesses the query and corpus by applying tokenization that lowercases the text, extracts words via the word-level regular expression `\b\w+\b`, and removes stop-words from a built-in Spanish and English list to mitigate statistical noise.
 
 ### 2. Reciprocal Rank Fusion (RRF)
 
-RRF es un metodo empirico de fusion de rankings basado en el orden relativo de los elementos en lugar de la magnitud absoluta de sus puntuaciones. Permite combinar distribuciones de probabilidad y distancias metricas distintas sin requerir calibracion o ajuste de escalas:
+RRF is an empirical ranking fusion method based on the relative order of items rather than the absolute magnitude of their scores. It allows combining different probability distributions and metric distances without requiring calibration or scale adjustment:
 
 $$\text{RRF\_score}(d) = \sum_{m \in M} \frac{1}{k + r_m(d)}$$
 
-Donde:
-*   $M$ es el conjunto de recuperadores (en este caso, Sparse y Dense).
-*   $r_m(d)$ es la posicion (rango) del documento $d$ en la lista devuelta por el recuperador $m$ (1-indexed). Si un documento no aparece en el ranking de un recuperador, su rango se considera infinito ($\frac{1}{\infty} = 0$).
-*   $k$ es una constante de suavizado (por defecto `60`), encargada de reducir la influencia desproporcionada de los primeros puestos del ranking y estabilizar la fusion frente a variaciones menores en posiciones bajas.
+Where:
+*   $M$ is the set of retrievers (in this case, Sparse and Dense).
+*   $r_m(d)$ is the position (rank) of document $d$ in the list returned by retriever $m$ (1-indexed). If a document doesn't appear in a retriever's ranking, its rank is treated as infinite ($\frac{1}{\infty} = 0$).
+*   $k$ is a smoothing constant (defaults to `60`), responsible for reducing the disproportionate influence of the top ranking positions and stabilizing the fusion against minor variations in lower positions.
 
-### 3. Fusion Lineal Ponderada (Score Normalization Fusion)
+### 3. Weighted Linear Fusion (Score Normalization Fusion)
 
-Cuando las puntuaciones de origen son necesarias para su analisis posterior, este metodo convierte las distancias de la busqueda densa y las puntuaciones de BM25 a un intervalo normalizado $[0, 1]$ usando la tecnica Min-Max:
+When the source scores are needed for further analysis, this method converts the dense search distances and BM25 scores to a normalized $[0, 1]$ range using the Min-Max technique:
 
 $$\text{Score}_{\text{norm}} = \frac{\text{Score} - \text{Score}_{\text{min}}}{\text{Score}_{\text{max}} - \text{Score}_{\text{min}}}$$
 
-Previamente, las distancias devueltas por `NanoVectorDB` (que dependen de la metrica configurada) se proyectan a indices de similitud:
-*   **Similitud de Coseno:** Se asume $\text{Similitud} = 1.0 - \text{distancia\_coseno}$.
-*   **Similitud Euclidea (L2):** Se transforma mediante la funcion monotonica $\text{Similitud} = \frac{1.0}{1.0 + \text{distancia\_L2}}$.
-*   **Similitud Dot Product:** Dado que `NanoVectorDB` almacena el negativo del producto escalar para minimizarlo como distancia, se establece $\text{Similitud} = -\text{distancia\_dot}$.
+Beforehand, the distances returned by `NanoVectorDB` (which depend on the configured metric) are projected onto similarity indices:
+*   **Cosine Similarity:** Assumes $\text{Similarity} = 1.0 - \text{cosine\_distance}$.
+*   **Euclidean Similarity (L2):** Transformed via the monotonic function $\text{Similarity} = \frac{1.0}{1.0 + \text{L2\_distance}}$.
+*   **Dot Product Similarity:** Since `NanoVectorDB` stores the negative of the dot product to minimize it as a distance, $\text{Similarity} = -\text{dot\_distance}$ is applied.
 
-Una vez obtenidas las similitudes normalizadas para ambas vias, el score combinado se calcula mediante una ponderacion parametrizable:
+Once the normalized similarities for both branches are obtained, the combined score is calculated via a parameterizable weighting:
 
 $$\text{Score}_{\text{final}}(d) = \alpha \cdot \text{Score}_{\text{norm\_dense}}(d) + (1.0 - \alpha) \cdot \text{Score}_{\text{norm\_sparse}}(d)$$
 
-Donde $\alpha \in [0, 1]$ es el coeficiente de ponderacion densa (por defecto `0.5`).
+Where $\alpha \in [0, 1]$ is the dense weighting coefficient (defaults to `0.5`).
 
-## Conexión con el Ecosistema
+## Connection to the Ecosystem
 
-Este modulo actua como un orquestador que conecta los siguientes subproyectos:
-1.  **nano-vector-db:** Recupera candidatos vectoriales densos a traves de busquedas en grafos HNSW multicapa. El pipeline le pasa vectores de consulta y filtros de metadatos opcionales, extrayendo las distancias y los IDs de los documentos.
-2.  **contrastive-embedding-trainer:** El pipeline comprueba si existe un modelo PyTorch/Transformers entrenado en la ruta relativa `../contrastive-embedding-trainer/model_output`. De estar disponible, lo carga automaticamente en memoria para codificar las queries de entrada mediante tecnicas de *Mean Pooling* y normalizacion L2. En caso de ausencia, utiliza un generador determinista pseudo-aleatorio basado en el hash de la cadena de texto para evitar la interrupcion del flujo de ejecucion.
+This module acts as an orchestrator that connects the following subprojects:
+1.  **nano-vector-db:** Retrieves dense vector candidates through multi-layer HNSW graph searches. The pipeline passes it query vectors and optional metadata filters, extracting the documents' distances and IDs.
+2.  **contrastive-embedding-trainer:** The pipeline checks whether a trained PyTorch/Transformers model exists at the relative path `../contrastive-embedding-trainer/model_output`. If available, it automatically loads it into memory to encode incoming queries via *Mean Pooling* and L2 normalization techniques. If absent, it uses a deterministic pseudo-random generator based on the text string's hash to avoid interrupting the execution flow.
 
-## Estructura de Archivos
+## File Structure
 
-*   `bm25.py`: Contiene la clase `BM25Retriever`, encargada de la tokenizacion, extraccion de frecuencias y calculo de puntuaciones Okapi BM25 e IDF.
-*   `fusion.py`: Modulo con las implementaciones de los algoritmos `reciprocal_rank_fusion` y `score_normalization_fusion`.
-*   `pipeline.py`: Clase `HybridSearchPipeline` que unifica los recuperadores y coordina la ejecucion de busquedas paralelas.
-*   `test_pipeline.py`: Conjunto de pruebas unitarias que validan el comportamiento y precision de las formulas matematicas de BM25, RRF y normalizacion.
-*   `example.py`: Codigo de demostracion interactiva que ilustra la diferencia de resultados al realizar busquedas lexicas pura, vectorial pura, RRF e hibrida por Score Normalization.
+*   `bm25.py`: Contains the `BM25Retriever` class, responsible for tokenization, frequency extraction, and Okapi BM25/IDF score calculation.
+*   `fusion.py`: Module with the implementations of the `reciprocal_rank_fusion` and `score_normalization_fusion` algorithms.
+*   `pipeline.py`: `HybridSearchPipeline` class that unifies the retrievers and coordinates parallel search execution.
+*   `test_pipeline.py`: Unit test suite that validates the behavior and accuracy of the BM25, RRF, and normalization math formulas.
+*   `example.py`: Interactive demo code that illustrates the difference in results when performing pure lexical search, pure vector search, RRF, and hybrid Score Normalization search.
 
-## Instalacion y Uso
+## Installation and Usage
 
-### 1. Configurar Entorno e Instalar Dependencias
+### 1. Set Up the Environment and Install Dependencies
 
-Se requiere Python 3.9 o superior. Inicialice el entorno virtual y asegure la presencia de las dependencias requeridas:
+Python 3.9 or higher is required. Initialize the virtual environment and ensure the required dependencies are present:
 
 ```bash
 python3 -m venv .venv
@@ -112,20 +112,20 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 2. Ejecutar las Pruebas Unitarias
+### 2. Run the Unit Tests
 
-El conjunto de pruebas valida la correccion matematica de las formulas de fusion de rankings y la coherencia de la busqueda BM25:
+The test suite validates the mathematical correctness of the ranking fusion formulas and the coherence of BM25 search:
 
 ```bash
 .venv/bin/python -m unittest test_pipeline.py
 ```
 
-### 3. Ejecutar Demostración de Búsqueda Híbrida
+### 3. Run the Hybrid Search Demo
 
-Para ver el pipeline en accion, ejecute:
+To see the pipeline in action, run:
 
 ```bash
 .venv/bin/python example.py
 ```
 
-El script pobla una base de datos vectorial `NanoVectorDB`, indexa el corpus de texto en el motor BM25 de forma concurrente, genera busquedas de ejemplo y muestra detalladamente la transicion de scores y posiciones resultantes bajo RRF y Score Normalization.
+The script populates a `NanoVectorDB` vector database, concurrently indexes the text corpus into the BM25 engine, generates example searches, and shows in detail the transition of scores and resulting positions under RRF and Score Normalization.
