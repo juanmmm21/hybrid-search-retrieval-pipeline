@@ -7,8 +7,8 @@ from typing import Dict, List, Tuple, Union
 
 
 
-from bm25 import BM25Retriever
-from fusion import reciprocal_rank_fusion, score_normalization_fusion
+from hybrid_search_retrieval_pipeline.bm25 import BM25Retriever
+from hybrid_search_retrieval_pipeline.fusion import reciprocal_rank_fusion, score_normalization_fusion
 
 class FlatCosineStore:
     """Base vectorial mínima que cumple ``VectorStore``: el pipeline no depende de ninguna
@@ -103,7 +103,7 @@ class TestHybridSearchPipeline(unittest.TestCase):
         """
         Verifica la orquestacion completa del pipeline de busqueda hibrida.
         """
-        from pipeline import HybridSearchPipeline
+        from hybrid_search_retrieval_pipeline.pipeline import HybridSearchPipeline
 
         # 1. Poblamos la base de datos vectorial
         db = FlatCosineStore(dimension=3)
@@ -139,13 +139,13 @@ if __name__ == "__main__":
 
 class TestQueryEmbedding(unittest.TestCase):
     def test_embed_fn_is_used_and_normalized(self) -> None:
-        from pipeline import HybridSearchPipeline
+        from hybrid_search_retrieval_pipeline.pipeline import HybridSearchPipeline
 
         pipeline = HybridSearchPipeline(vector_db=FlatCosineStore(3), embed_fn=lambda q: [3.0, 4.0, 0.0])
         np.testing.assert_allclose(pipeline._get_query_embedding("x"), [0.6, 0.8, 0.0], rtol=1e-6)
 
     def test_hash_embedding_is_stable(self) -> None:
-        from pipeline import hash_embedding
+        from hybrid_search_retrieval_pipeline.pipeline import hash_embedding
 
         np.testing.assert_allclose(hash_embedding("hola", 8), hash_embedding("hola", 8))
         self.assertAlmostEqual(float(np.linalg.norm(hash_embedding("hola", 8))), 1.0, places=6)

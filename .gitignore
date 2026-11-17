@@ -13,3 +13,8 @@ env/
 # Data and pickle files
 *.pkl
 *.bin
+
+# Packaging
+build/
+dist/
+*.egg-info/

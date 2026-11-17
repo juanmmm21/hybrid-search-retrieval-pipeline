@@ -100,6 +100,28 @@ This module acts as an orchestrator that connects the following subprojects:
 *   `test_pipeline.py`: Unit test suite that validates the behavior and accuracy of the BM25, RRF, and normalization math formulas.
 *   `example.py`: Interactive demo code that illustrates the difference in results when performing pure lexical search, pure vector search, RRF, and hybrid Score Normalization search.
 
+## Using it as a package
+
+Since `0.1.0` the code lives in the `hybrid_search_retrieval_pipeline` package and the repository is
+pip-installable, so other projects can depend on it instead of copying files
+or editing `sys.path`:
+
+```bash
+pip install "hybrid-search-retrieval-pipeline @ git+https://github.com/juanmmm21/hybrid-search-retrieval-pipeline.git@v0.1.0"
+```
+
+```python
+from hybrid_search_retrieval_pipeline import BM25Retriever
+```
+
+The old top-level modules are kept as thin re-exports, so scripts that add
+this folder to `sys.path` keep working. This component imports no other
+ai-core component: they are combined in the `aicore` SDK of
+[ai-core-infra-hub](https://github.com/juanmmm21/ai-core-infra-hub), which
+passes collaborators (vector stores, encoders, tokenizers) in by injection.
+
+Development: `pip install -e ".[dev]"`, then `pytest` and `ruff check .`.
+
 ## Installation and Usage
 
 ### 1. Set Up the Environment and Install Dependencies
