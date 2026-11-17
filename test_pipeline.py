@@ -4,11 +4,34 @@ import os
 import numpy as np
 from typing import Dict, List, Tuple, Union
 
-# Añadimos rutas locales para cargar tanto el modulo actual como el de nano-vector-db (Interlinking)
-sys.path.append(os.path.abspath("../nano-vector-db"))
+
+
 
 from bm25 import BM25Retriever
 from fusion import reciprocal_rank_fusion, score_normalization_fusion
+
+class FlatCosineStore:
+    """Base vectorial mínima que cumple ``VectorStore``: el pipeline no depende de ninguna
+    concreta (los componentes del ecosistema no se importan entre sí)."""
+
+    metric = "cosine"
+
+    def __init__(self, dimension: int) -> None:
+        self.dimension = dimension
+        self.vectors: Dict[str, np.ndarray] = {}
+        self.metadata: Dict[str, Dict[str, str]] = {}
+
+    def insert(self, id: str, vector: List[float], metadata: Dict[str, str]) -> None:
+        v = np.asarray(vector, dtype=np.float32)
+        self.vectors[id] = v / np.linalg.norm(v)
+        self.metadata[id] = metadata
+
+    def query(self, vector, top_k=5, filter=None):
+        q = np.asarray(vector, dtype=np.float32)
+        q = q / np.linalg.norm(q)
+        scored = sorted((1.0 - float(q @ v), i) for i, v in self.vectors.items())
+        return [{"id": i, "distance": d} for d, i in scored[:top_k]]
+
 
 class TestHybridSearchPipeline(unittest.TestCase):
     """
@@ -80,11 +103,10 @@ class TestHybridSearchPipeline(unittest.TestCase):
         """
         Verifica la orquestacion completa del pipeline de busqueda hibrida.
         """
-        from database import NanoVectorDB
         from pipeline import HybridSearchPipeline
-        
+
         # 1. Poblamos la base de datos vectorial
-        db = NanoVectorDB(dimension=3, index_type="flat", metric="cosine")
+        db = FlatCosineStore(dimension=3)
         db.insert(id="doc1", vector=[1.0, 0.0, 0.0], metadata={"category": "nature"})
         db.insert(id="doc2", vector=[0.0, 1.0, 0.0], metadata={"category": "tech"})
         
@@ -113,3 +135,17 @@ class TestHybridSearchPipeline(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestQueryEmbedding(unittest.TestCase):
+    def test_embed_fn_is_used_and_normalized(self) -> None:
+        from pipeline import HybridSearchPipeline
+
+        pipeline = HybridSearchPipeline(vector_db=FlatCosineStore(3), embed_fn=lambda q: [3.0, 4.0, 0.0])
+        np.testing.assert_allclose(pipeline._get_query_embedding("x"), [0.6, 0.8, 0.0], rtol=1e-6)
+
+    def test_hash_embedding_is_stable(self) -> None:
+        from pipeline import hash_embedding
+
+        np.testing.assert_allclose(hash_embedding("hola", 8), hash_embedding("hola", 8))
+        self.assertAlmostEqual(float(np.linalg.norm(hash_embedding("hola", 8))), 1.0, places=6)

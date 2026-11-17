@@ -1,41 +1,43 @@
-import os
-import sys
+import hashlib
 import logging
-from typing import List, Dict, Any, Union, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Protocol, Union
+
 import numpy as np
-
-# Añadimos dinámicamente el directorio del nano-vector-db al path del sistema (Interlinking)
-sys.path.append(os.path.abspath("../nano-vector-db"))
-
-try:
-    from database import NanoVectorDB
-except ImportError:
-    # Definimos un placeholder para tipado estricto si no compila de forma preliminar
-    class NanoVectorDB:
-        pass
 
 from bm25 import BM25Retriever
 from fusion import reciprocal_rank_fusion, score_normalization_fusion
 
 logger = logging.getLogger(__name__)
 
-# Intentamos habilitar codificación local para queries de texto plano mediante el contrastive model
-MODEL_PATH = "../contrastive-embedding-trainer/model_output"
-EMBEDDING_MODEL_AVAILABLE = False
-tokenizer = None
-model = None
-torch = None
 
-try:
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-    if os.path.exists(MODEL_PATH) and os.path.exists(os.path.join(MODEL_PATH, "config.json")):
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-        model = AutoModel.from_pretrained(MODEL_PATH)
-        model.eval()
-        EMBEDDING_MODEL_AVAILABLE = True
-except ImportError:
-    pass
+class VectorStore(Protocol):
+    """Lo que el pipeline necesita de la rama densa.
+
+    Cualquier base vectorial que lo cumpla sirve (``nano_vector_db.NanoVectorDB`` lo cumple tal
+    cual). El pipeline no importa ninguna: quien lo monta (p. ej. el SDK ``aicore`` del hub) le
+    pasa la instancia, de modo que los componentes del ecosistema no se importan entre sí.
+    """
+
+    dimension: int
+    metric: str
+    metadata: Dict[Any, Dict[str, Any]]
+    vectors: Dict[Any, Any]
+
+    def query(
+        self, vector: Any, top_k: int = 5, filter: Optional[Dict[str, Any]] = None
+    ) -> List[Dict[str, Any]]: ...
+
+
+EmbedFn = Callable[[str], Union[List[float], np.ndarray]]
+
+
+def hash_embedding(text: str, dimension: int) -> np.ndarray:
+    """Vector pseudoaleatorio estable entre procesos (md5, no ``hash()``, que cambia con
+    ``PYTHONHASHSEED``). Solo para pruebas y demos: no captura ningún significado."""
+    seed = int(hashlib.md5(text.encode("utf-8")).hexdigest(), 16) % (2**32)
+    vec = np.random.RandomState(seed).normal(0.0, 1.0, dimension)
+    norm = np.linalg.norm(vec)
+    return vec / norm if norm > 1e-9 else vec
 
 
 class HybridSearchPipeline:
@@ -48,17 +50,21 @@ class HybridSearchPipeline:
     
     def __init__(
         self,
-        vector_db: NanoVectorDB,
+        vector_db: VectorStore,
         k1: float = 1.5,
-        b: float = 0.75
+        b: float = 0.75,
+        embed_fn: Optional[EmbedFn] = None,
     ) -> None:
         """
         Args:
-            vector_db: Instancia iniciada y poblada de NanoVectorDB.
+            vector_db: Base vectorial ya poblada que cumpla ``VectorStore``.
             k1: Parametro k1 de saturacion en BM25.
             b: Parametro b de normalizacion de longitud en BM25.
+            embed_fn: Codificador de la consulta (texto -> vector). Sin el, se usa
+                ``hash_embedding``, que solo sirve para pruebas.
         """
         self.vector_db = vector_db
+        self.embed_fn = embed_fn
         self.bm25 = BM25Retriever(k1=k1, b=b)
         
     def fit_sparse(self, corpus: Dict[Union[str, int], str]) -> None:
@@ -69,37 +75,12 @@ class HybridSearchPipeline:
         logger.info(f"Corpus de busqueda lexica BM25 entrenado exitosamente con {len(corpus)} documentos.")
         
     def _get_query_embedding(self, query: str) -> np.ndarray:
-        """
-        Obtiene el embedding normalizado de la query. Usa el modelo contrastivo local si esta.
-        Si no, realiza una simulacion vectorial determinista mediante hash de palabras.
-        """
-        if EMBEDDING_MODEL_AVAILABLE and tokenizer is not None and model is not None and torch is not None:
-            with torch.no_grad():
-                inputs = tokenizer(
-                    query,
-                    padding=True,
-                    truncation=True,
-                    max_length=64,
-                    return_tensors="pt"
-                )
-                outputs = model(**inputs)
-                
-                # Mean Pooling + Normalizacion L2
-                token_embeddings = outputs.last_hidden_state
-                attention_mask = inputs["attention_mask"]
-                input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-                sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
-                sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-                
-                embedding = sum_embeddings / sum_mask
-                normalized = torch.nn.functional.normalize(embedding, p=2, dim=1)
-                return normalized.squeeze(0).cpu().numpy()
-        else:
-            # Simulacion vectorial determinista
-            state = np.random.RandomState(abs(hash(query)) % (2**32))
-            vec = state.normal(0.0, 1.0, self.vector_db.dimension)
+        """Embedding normalizado de la consulta con ``embed_fn``; sin el, ``hash_embedding``."""
+        if self.embed_fn is not None:
+            vec = np.asarray(self.embed_fn(query), dtype=np.float32)
             norm = np.linalg.norm(vec)
             return vec / norm if norm > 1e-9 else vec
+        return hash_embedding(query, self.vector_db.dimension)
 
     def search(
         self,

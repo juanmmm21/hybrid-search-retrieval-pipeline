@@ -1,63 +1,40 @@
-import os
-import sys
 import logging
-import numpy as np
-from typing import List, Dict, Any
+from typing import Dict, List
 
-# Añadimos rutas locales para cargar el modulo de nano-vector-db (Interlinking)
-sys.path.append(os.path.abspath("../nano-vector-db"))
-from database import NanoVectorDB
-from pipeline import HybridSearchPipeline
+import numpy as np
+
+from pipeline import HybridSearchPipeline, hash_embedding
 
 # Habilitamos logs basicos
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
 logger = logging.getLogger(__name__)
 
-# Intentamos importar Deep Learning para la generacion de embeddings semanticos reales
-SEMAN_SEARCH_ENABLED = False
-tokenizer = None
-model = None
-torch = None
 
-MODEL_PATH = "../contrastive-embedding-trainer/model_output"
+class FlatCosineStore:
+    """Base vectorial exacta minima para la demo. El pipeline acepta cualquier ``VectorStore``;
+    con el SDK ``aicore`` del hub se monta sobre ``nano-vector-db`` y un codificador real."""
 
-try:
-    import torch
-    from transformers import AutoModel, AutoTokenizer
-    if os.path.exists(MODEL_PATH) and os.path.exists(os.path.join(MODEL_PATH, "config.json")):
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_PATH)
-        model = AutoModel.from_pretrained(MODEL_PATH)
-        model.eval()
-        SEMAN_SEARCH_ENABLED = True
-except ImportError:
-    pass
+    metric = "cosine"
+
+    def __init__(self, dimension: int) -> None:
+        self.dimension = dimension
+        self.vectors: Dict[int, np.ndarray] = {}
+        self.metadata: Dict[int, dict] = {}
+
+    def insert(self, id: int, vector: np.ndarray, metadata: dict) -> None:
+        self.vectors[id] = np.asarray(vector, dtype=np.float32)
+        self.metadata[id] = metadata
+
+    def query(self, vector, top_k: int = 5, filter=None) -> List[dict]:
+        q = np.asarray(vector, dtype=np.float32)
+        scored = sorted((1.0 - float(q @ v), i) for i, v in self.vectors.items())
+        return [{"id": i, "distance": d} for d, i in scored[:top_k]]
 
 
 def get_embedding(text: str) -> np.ndarray:
-    """
-    Genera el embedding L2 normalizado de una frase.
-    Usa el modelo local si esta disponible, o cae a simulacion vectorial determinista.
-    """
-    if SEMAN_SEARCH_ENABLED and tokenizer is not None and model is not None and torch is not None:
-        with torch.no_grad():
-            inputs = tokenizer(text, padding=True, truncation=True, max_length=64, return_tensors="pt")
-            outputs = model(**inputs)
-            
-            token_embeddings = outputs.last_hidden_state
-            attention_mask = inputs["attention_mask"]
-            input_mask_expanded = attention_mask.unsqueeze(-1).expand(token_embeddings.size()).float()
-            sum_embeddings = torch.sum(token_embeddings * input_mask_expanded, 1)
-            sum_mask = torch.clamp(input_mask_expanded.sum(1), min=1e-9)
-            
-            embedding = sum_embeddings / sum_mask
-            normalized = torch.nn.functional.normalize(embedding, p=2, dim=1)
-            return normalized.squeeze(0).cpu().numpy()
-    else:
-        # Generador de embeddings de simulacion determinista basado en hash
-        state = np.random.RandomState(abs(hash(text)) % (2**32))
-        vec = state.normal(0.0, 1.0, 768)
-        norm = np.linalg.norm(vec)
-        return vec / norm if norm > 1e-9 else vec
+    """Embedding de hash, estable pero sin semantica: la rama densa de la demo solo
+    ilustra la fusion. La busqueda lexica BM25 es la que acierta aqui."""
+    return hash_embedding(text, 768)
 
 
 def main() -> None:
@@ -67,17 +44,8 @@ def main() -> None:
     
     # 1. Definicion y poblacion de la base de datos vectorial
     dimension = 768
-    metric = "cosine"
-    
-    print("\n1. Inicializando base de datos de vectores (HNSW)...")
-    db = NanoVectorDB(
-        dimension=dimension,
-        metric=metric,
-        index_type="hnsw",
-        M=16,
-        efConstruction=64,
-        efSearch=32
-    )
+    print("\n1. Inicializando base de datos de vectores (exacta, en memoria)...")
+    db = FlatCosineStore(dimension=dimension)
     
     # Corpus de oraciones de prueba
     documents = {
@@ -99,7 +67,7 @@ def main() -> None:
         7: "cocina", 8: "cocina", 9: "cocina"
     }
     
-    print("Vectorizando e insertando documentos en HNSW...")
+    print("Vectorizando e insertando documentos...")
     for doc_id, text in documents.items():
         vec = get_embedding(text)
         metadata = {"category": categories[doc_id], "text": text}
@@ -133,7 +101,7 @@ def main() -> None:
             print(f"    - ID: {doc_id} | Score: {score:.4f} | '{documents[doc_id]}'")
             
         # B. Solo Densa (Vector HNSW)
-        print("\n  [B] Solo Dense (Vectores HNSW):")
+        print("\n  [B] Solo Dense (vectores):")
         dense_res = db.query(q_vec, top_k=2)
         for r in dense_res:
             print(f"    - ID: {r['id']} | Distancia: {r['distance']:.4f} | '{documents[r['id']]}'")
